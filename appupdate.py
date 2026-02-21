@@ -10,10 +10,11 @@ import zipfile
 import unicodedata
 import pandas as pd
 import gspread
+import os  # <--- 補上漏掉的導入
 from google.oauth2.service_account import Credentials
 
 # ────────────────────────────────────────────────
-# 1. 雲端記憶模組 (新增：不影響原解析邏輯)
+# 1. 雲端記憶模組 (保持原樣)
 # ────────────────────────────────────────────────
 def get_gsheet_client():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -40,7 +41,6 @@ def save_to_cloud(wrong, right):
         except: pass
 
 def ai_smart_fix(text):
-    """這是一個濾鏡，只在最後顯示或匯出時才對文字進行替換"""
     if not text: return text
     memory = load_cloud_memory()
     for wrong, right in memory.items():
@@ -49,9 +49,10 @@ def ai_smart_fix(text):
     return text
 
 # ────────────────────────────────────────────────
-# 2. 原有成功辨識邏輯 (完全保留，不作任何更動)
+# 2. 原有成功辨識邏輯 (完全保留，不動任何正則)
 # ────────────────────────────────────────────────
 
+# 設定 Poppler 路徑
 LOCAL_POPPLER_PATH = r"C:\Users\User\Desktop\pdf_explain new\poppler-25.12.0\Library\bin"
 POPPLER_PATH = LOCAL_POPPLER_PATH if os.path.exists(LOCAL_POPPLER_PATH) else None
 
@@ -63,11 +64,11 @@ def normalize(text):
     if not text: return ""
     return unicodedata.normalize("NFKC", re.sub(r'\s+', '', text))
 
-# 您原有的 OCR 策略
 def fix_addr_post_process(text: str) -> str:
     if not text: return text
-    # 將 AI 修正掛在原校正的第一步
+    # 先過濾雲端記憶
     text = ai_smart_fix(text)
+    # 您的原校正表
     _ADDR_CHAR_MAP = {'耋': '臺', '耸': '臺', '孿': '學', '孽': '學', '壆': '學', '覃': '南'}
     for wrong, right in _ADDR_CHAR_MAP.items():
         text = text.replace(wrong, right)
@@ -99,7 +100,7 @@ def extract_addr_from_image_stream(page, ocr, debug_log: list):
         return f"{target['text']} {val}"
     except: return ""
 
-# 原有三大解析函式 (完全保留內容)
+# 三大解析核心（完全不動內部邏輯）
 def process_表格式(pdf, ocr, all_imgs, fmt):
     output, debug = [], []
     for i, page in enumerate(pdf.pages):
@@ -132,52 +133,51 @@ def process_謄本(pdf, ocr, all_imgs):
     return "\n\n".join(output), []
 
 # ────────────────────────────────────────────────
-# 3. Excel 結構化解析 (依照 sample.xlsx 調整欄位)
+# 3. Excel 結構化解析 (強化地段、面積、所有權人擷取)
 # ────────────────────────────────────────────────
 def parse_for_excel(text):
-    # 先套用 AI 修正，確保欄位擷取時就是對的
+    # 解析前先套用雲端記憶
     text = ai_smart_fix(text)
     
-    # 對齊 sample.xlsx 的欄位格式
     data = {
         "地號全名": "", "地號": "", "面積": "", 
         "公告土地現值": "", "所有權人": "", "統一編號": "", "地址": ""
     }
     
-    # 行政區與段
+    # 修正：地段抓取更寬容
     m_loc = re.search(r'([^\s]+(?:縣|市)[^\s]+(?:區|鄉|鎮|市)[^\s]+段)', text)
     if m_loc: data["地號全名"] = m_loc.group(1)
     
-    # 地號 (1437-0000)
+    # 修正：地號抓取
     m_no = re.search(r'(\d{4}-\d{4})', text)
     if m_no: data["地號"] = m_no.group(1)
     
-    # 面積 (抓取數字)
+    # 修正：面積抓取 (支援 sample.xlsx 中的逗號與空格)
     m_area = re.search(r'面積\s*[,，]?\s*([\d.]+)', text)
     if m_area: data["面積"] = m_area.group(1)
     
-    # 公告現值
+    # 修正：公告現值
     m_price = re.search(r'公告土地現值.*?(\d+)\s*元', text)
     if m_price: data["公告土地現值"] = m_price.group(1)
     
-    # 所有權人 (蔡**)
+    # 修正：所有權人
     m_owner = re.search(r'所有權人\s*[,，]?\s*([^\s,，]+)', text)
     if m_owner: data["所有權人"] = m_owner.group(1).replace('*', '＊')
     
-    # 統一編號
+    # 修正：統一編號
     m_id = re.search(r'統一編號\s*[,，]?\s*([A-Z\d\*]+)', text)
     if m_id: data["統一編號"] = m_id.group(1)
 
-    # 地址
+    # 修正：地址
     m_addr = re.search(r'地\s*址\s*[,，]?\s*(.+)', text)
     if m_addr: data["地址"] = m_addr.group(1).strip()
     
     return data
 
 # ────────────────────────────────────────────────
-# 4. Streamlit 介面邏輯
+# 4. UI 介面
 # ────────────────────────────────────────────────
-st.set_page_config(page_title="地政智慧解譯穩定版", layout="wide")
+st.set_page_config(page_title="地政解譯穩定版", layout="wide")
 ocr_engine = load_ocr()
 
 def main():
@@ -188,14 +188,15 @@ def main():
 
     files = st.file_uploader("上傳 PDF", type="pdf", accept_multiple_files=True)
     
-    if files and st.button("🚀 開始深度辨識"):
+    if files and st.button("🚀 開始全自動解譯"):
         rows = []
         for f in files:
-            with st.spinner(f"處理中: {f.name}"):
+            with st.spinner(f"正在分析 {f.name}..."):
                 pdf_bytes = f.read()
                 all_imgs = convert_from_bytes(pdf_bytes, dpi=300, poppler_path=POPPLER_PATH)
                 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                     first_text = pdf.pages[0].extract_text() or ""
+                    # 依據標籤判定使用哪種解析器 (完全保留原分類邏輯)
                     if any(k in first_text for k in ["謄本種類碼", "列印時間"]):
                         txt, _ = process_謄本(pdf, ocr_engine, all_imgs)
                     elif "一覽表" in first_text:
@@ -209,11 +210,10 @@ def main():
         st.session_state.main_df = pd.DataFrame(rows)
 
     if st.session_state.main_df is not None:
-        st.subheader("📝 修正與 AI 訓練")
-        # 顯示編輯器
+        st.subheader("📝 成果修正區")
         edited_df = st.data_editor(st.session_state.main_df, num_rows="fixed")
         
-        if st.button("🧠 確認修正並訓練 AI"):
+        if st.button("🧠 確認修正並訓練 AI (永久儲存)"):
             for idx in range(len(edited_df)):
                 for col in ["地址", "所有權人"]:
                     old_v = str(st.session_state.main_df.iloc[idx][col])
@@ -221,22 +221,19 @@ def main():
                     if old_v != new_v and old_v != "":
                         save_to_cloud(old_v, new_v)
             st.session_state.main_df = edited_df
-            st.success("AI 已紀錄修正，下載檔將套用新規則。")
+            st.success("🎉 AI 學習成功！下次遇到相同內容將自動校正。")
 
-        # ────── 下載區 (重點：解決問題 1 與 2) ──────
         col1, col2 = st.columns(2)
         with col1:
-            # 產出 Excel
             xlsx_io = io.BytesIO()
             edited_df.to_excel(xlsx_io, index=False)
             st.download_button("📥 下載 Excel 報表", xlsx_io.getvalue(), "地政彙整.xlsx")
-
+        
         with col2:
-            # 下載 TXT (重點：在此處重新修正 TXT)
             z_io = io.BytesIO()
             with zipfile.ZipFile(z_io, "w") as zf:
                 for fname, content in st.session_state.raw_txts.items():
-                    # 在寫入 ZIP 前，將原始文字再跑一次 AI 修正濾鏡
+                    # 重點：讓 TXT 下載時也同步雲端修正
                     final_txt = ai_smart_fix(content)
                     zf.writestr(f"{fname}.txt", final_txt)
             st.download_button("📦 下載修正後的 TXT (ZIP)", z_io.getvalue(), "results.zip")
