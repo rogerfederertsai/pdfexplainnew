@@ -7,3 +7,5 @@ pillow
 numpy
 opencv-python-headless
 easyocr
+pandas
+xlsxwriter
