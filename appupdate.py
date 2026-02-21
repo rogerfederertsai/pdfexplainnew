@@ -11,11 +11,11 @@ import unicodedata
 import pandas as pd
 import gspread
 import os
-import difflib  # 用於精準比對錯字
+import difflib  # 核心比對工具
 from google.oauth2.service_account import Credentials
 
 # ────────────────────────────────────────────────
-# 1. 雲端記憶模組 (升級：上下文感應)
+# 1. 雲端記憶模組 (智慧修正)
 # ────────────────────────────────────────────────
 def get_gsheet_client():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -42,10 +42,9 @@ def save_to_cloud(wrong, right):
         except: pass
 
 def ai_smart_fix(text, current_memory=None):
-    """應用雲端記憶修正文字"""
     if not text: return text
     memory = current_memory if current_memory is not None else load_cloud_memory()
-    # 按照長度排序，先替換長字串（環境關鍵字），再替換短字串
+    # 優先替換長字串，避免短字串干擾
     sorted_keys = sorted(memory.keys(), key=len, reverse=True)
     for wrong_key in sorted_keys:
         if wrong_key in text:
@@ -53,7 +52,7 @@ def ai_smart_fix(text, current_memory=None):
     return text
 
 # ────────────────────────────────────────────────
-# 2. 原有穩定辨識邏輯 (完全保留，不作任何更動)
+# 2. 原有穩定辨識邏輯 (完全保留)
 # ────────────────────────────────────────────────
 LOCAL_POPPLER_PATH = r"C:\Users\User\Desktop\pdf_explain new\poppler-25.12.0\Library\bin"
 POPPLER_PATH = LOCAL_POPPLER_PATH if os.path.exists(LOCAL_POPPLER_PATH) else None
@@ -66,9 +65,12 @@ def normalize(text):
     if not text: return ""
     return unicodedata.normalize("NFKC", re.sub(r'\s+', '', text))
 
+# (這裡請保留您原本完整的 fix_addr_post_process, ocr_with_best_result, 
+# extract_addr_from_image_stream, process_表格式, process_群璇, process_謄本 函數)
+# ... [保留原函數內容] ...
+
 def fix_addr_post_process(text: str) -> str:
     if not text: return text
-    # 這裡保留您原本的基礎字符對照表
     _ADDR_CHAR_MAP = {'耋': '臺', '耸': '臺', '孿': '學', '孽': '學', '壆': '學', '覃': '南'}
     for wrong, right in _ADDR_CHAR_MAP.items():
         text = text.replace(wrong, right)
@@ -77,9 +79,6 @@ def fix_addr_post_process(text: str) -> str:
     text = re.sub(rf'({_ADDR_CJK})\s+(\d)', r'\1\2', text)
     text = re.sub(rf'(\d)\s+({_ADDR_CJK})', r'\1\2', text)
     return text
-
-# ... (ocr_with_best_result, extract_addr_from_image_stream, process_表格式, process_群璇, process_謄本 均保持您原本的代碼內容) ...
-# [註：此處省略重複的函數體，請保留您原本可運作的那些函數內容]
 
 def ocr_with_best_result(ocr, img_gray: np.ndarray) -> tuple:
     fx, fy = 4, 4
@@ -135,45 +134,44 @@ def process_謄本(pdf, ocr, all_imgs):
     return "\n\n".join(output), []
 
 # ────────────────────────────────────────────────
-# 3. Excel 結構化解析 (參照 sample.xlsx 格式)
+# 3. Excel 解析 (對齊範本)
 # ────────────────────────────────────────────────
 def parse_for_excel(text):
-    # 此處回傳字典，供 DataFrame 使用
     data = {
         "行政區/段": "", "地號": "", "面積(m2)": "", 
         "公告土地現值": "", "所有權人": "", "統一編號": "", "地址": ""
     }
+    # 行政區段
     m_loc = re.search(r'([^\s]+(?:縣|市)[^\s]+(?:區|鄉|鎮|市)[^\s]+段)', text)
     if m_loc: data["行政區/段"] = m_loc.group(1)
-    
+    # 地號
     m_no = re.search(r'(\d{4}-\d{4})', text)
     if m_no: data["地號"] = m_no.group(1)
-    
+    # 面積
     m_area = re.search(r'面積\s*[,，]?\s*([\d.]+)', text)
     if m_area: data["面積(m2)"] = m_area.group(1)
-    
+    # 現值
     m_price = re.search(r'公告土地現值.*?(\d+)\s*元', text)
     if m_price: data["公告土地現值"] = m_price.group(1)
-    
+    # 所有權人
     m_owner = re.search(r'所有權人\s*[,，]?\s*([^\s,，]+)', text)
     if m_owner: data["所有權人"] = m_owner.group(1).replace('*', '＊')
-    
+    # 統編
     m_id = re.search(r'統一編號\s*[,，]?\s*([A-Z\d\*]+)', text)
     if m_id: data["統一編號"] = m_id.group(1)
-
+    # 地址
     m_addr = re.search(r'地\s*址\s*[,，]?\s*(.+)', text)
     if m_addr: data["地址"] = m_addr.group(1).strip()
-    
     return data
 
 # ────────────────────────────────────────────────
-# 4. Streamlit 介面與智慧修正邏輯
+# 4. Streamlit UI 與動態窗口學習邏輯
 # ────────────────────────────────────────────────
 st.set_page_config(page_title="地政智慧解譯", layout="wide")
 ocr_engine = load_ocr()
 
 def main():
-    st.title("🏠 地政 AI 智慧解譯 (雲端穩定版)")
+    st.title("🏠 地政 AI 智慧解譯 (動態窗口修正版)")
     
     if 'main_df' not in st.session_state: st.session_state.main_df = None
     if 'raw_txts' not in st.session_state: st.session_state.raw_txts = {}
@@ -183,7 +181,7 @@ def main():
     if files and st.button("🚀 開始解譯"):
         rows = []
         for f in files:
-            with st.spinner(f"正在分析 {f.name}..."):
+            with st.spinner(f"分析中: {f.name}"):
                 pdf_bytes = f.read()
                 all_imgs = convert_from_bytes(pdf_bytes, dpi=300, poppler_path=POPPLER_PATH)
                 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -201,40 +199,45 @@ def main():
         st.session_state.main_df = pd.DataFrame(rows)
 
     if st.session_state.main_df is not None:
-        st.subheader("📝 修正成果與 AI 訓練")
+        st.subheader("📝 成果修正與 AI 學習")
         edited_df = st.data_editor(st.session_state.main_df, num_rows="fixed")
         
-        if st.button("🧠 儲存修正 (僅紀錄差異字與環境)"):
+        if st.button("🧠 儲存修正 (依錯字數動態學習)"):
             for idx in range(len(edited_df)):
                 for col in ["地址", "所有權人"]:
                     old_v = str(st.session_state.main_df.iloc[idx][col])
                     new_v = str(edited_df.iloc[idx][col])
                     
                     if old_v != new_v and old_v != "":
-                        # --- 智慧比對邏輯：找出錯字及其鄰居 ---
+                        # --- 動態窗口邏輯：找出連續錯字區塊 ---
                         diff = list(difflib.ndiff(old_v, new_v))
-                        for i, s in enumerate(diff):
-                            if s.startswith('- '): # 發現錯字
-                                wrong_char = s[2:]
-                                right_char = ""
-                                if i+1 < len(diff) and diff[i+1].startswith('+ '):
-                                    right_char = diff[i+1][2:]
+                        i = 0
+                        while i < len(diff):
+                            if diff[i].startswith('- '):
+                                # 發現錯字起點，開始抓取連續錯誤區塊
+                                wrong_block = ""
+                                right_block = ""
+                                start_idx = i
                                 
-                                if wrong_char and right_char:
-                                    # 抓取左鄰右舍一個字當作「環境關鍵字」
-                                    prefix = diff[i-1][2:] if i>0 and diff[i-1].startswith('  ') else ""
-                                    suffix = diff[i+1][2:] if i+1<len(diff) and diff[i+1].startswith('  ') else ""
-                                    if i+2 < len(diff) and not right_char and diff[i+2].startswith('  '):
-                                        suffix = diff[i+2][2:]
-                                    
-                                    # 存入雲端格式： "左+錯+右" -> "左+對+右"
-                                    # 這樣就能確保「市祥岡」會改，但「祥順路」不會動
-                                    save_to_cloud(f"{prefix}{wrong_char}{suffix}", f"{prefix}{right_char}{suffix}")
+                                # 收集連續的 '-' 和 '+'
+                                while i < len(diff) and (diff[i].startswith('- ') or diff[i].startswith('+ ')):
+                                    if diff[i].startswith('- '): wrong_block += diff[i][2:]
+                                    if diff[i].startswith('+ '): right_block += diff[i][2:]
+                                    i += 1
+                                
+                                # 抓取前後鄰居各一個字
+                                prefix = diff[start_idx-1][2:] if start_idx > 0 and diff[start_idx-1].startswith('  ') else ""
+                                suffix = diff[i][2:] if i < len(diff) and diff[i].startswith('  ') else ""
+                                
+                                # 組合存入雲端 (環境字 + 錯誤區塊 + 環境字)
+                                save_to_cloud(f"{prefix}{wrong_block}{suffix}", f"{prefix}{right_block}{suffix}")
+                            else:
+                                i += 1
             
             st.session_state.main_df = edited_df
-            st.success("AI 學習完成！下載 TXT 將自動同步更正。")
+            st.success("AI 學習完成！已根據錯字長度自動調整記憶環境。")
 
-        # ────── 下載區 (解決問題 1：TXT 同步) ──────
+        # ────── 下載區 (TXT 同步修正) ──────
         c1, c2 = st.columns(2)
         with c1:
             xlsx_io = io.BytesIO()
@@ -243,10 +246,10 @@ def main():
         
         with c2:
             z_io = io.BytesIO()
-            latest_mem = load_cloud_memory() # 下載前強制更新雲端規則
+            latest_mem = load_cloud_memory() 
             with zipfile.ZipFile(z_io, "w") as zf:
                 for fname, content in st.session_state.raw_txts.items():
-                    # 在寫入 TXT 之前，拿最新規則去替換全文內容
+                    # 寫入前執行 AI 即時修正
                     final_txt = ai_smart_fix(content, latest_mem)
                     zf.writestr(f"{fname}.txt", final_txt)
             st.download_button("📦 下載修正後 TXT (ZIP)", z_io.getvalue(), "results.zip")
