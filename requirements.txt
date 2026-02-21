@@ -9,3 +9,13 @@ opencv-python-headless
 easyocr
 pandas
 xlsxwriter
+gspread
+streamlit
+pdfplumber
+pdf2image
+easyocr
+opencv-python-headless
+pandas
+xlsxwriter
+gspread
+google-auth
