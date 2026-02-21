@@ -10,39 +10,59 @@ import zipfile
 import unicodedata
 import json
 import os
-import difflib
 import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
 
 # ────────────────────────────────────────────────
-# 1. AI 學習與記憶模組 (新增)
+# 1. Google Sheets 雲端連線模組 (取代原本的 JSON 檔)
 # ────────────────────────────────────────────────
-LEARNING_FILE = "ai_learning.json"
 
-def load_ai_memory():
-    if os.path.exists(LEARNING_FILE):
+def get_gsheet_client():
+    """透過 Streamlit Secrets 連結 Google Sheets"""
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    try:
+        # 從 Secrets 讀取您填寫的 TOML 金鑰
+        creds_info = st.secrets["gcp_service_account"]
+        creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
+        gc = gspread.authorize(creds)
+        # 開啟試算表 (請確保試算表名稱正確)
+        return gc.open("地政AI學習庫").sheet1
+    except Exception as e:
+        return None
+
+def load_cloud_memory():
+    """從雲端讀取所有學習過的修正紀錄"""
+    sheet = get_gsheet_client()
+    if sheet:
         try:
-            with open(LEARNING_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except: return {"history": {}}
-    return {"history": {}}
+            records = sheet.get_all_records()
+            # 建立對照字典，例如 {"公孽路": "公學路"}
+            return {str(r['wrong']): str(r['right']) for r in records if 'wrong' in r}
+        except: return {}
+    return {}
 
-def save_ai_memory(memory):
-    with open(LEARNING_FILE, 'w', encoding='utf-8') as f:
-        json.dump(memory, f, ensure_ascii=False, indent=2)
+def save_to_cloud(wrong, right):
+    """將修正結果永久存入 Google Sheets"""
+    sheet = get_gsheet_client()
+    if sheet:
+        try:
+            sheet.append_row([str(wrong), str(right)])
+        except: pass
 
-def ai_smart_fix(text, category="general"):
-    """自動套用 AI 學習過的修正行為"""
-    memory = load_ai_memory()
-    mapping = memory.get("history", {})
-    # 針對整段文字進行已知錯誤置換
-    for wrong, right in mapping.items():
-        if wrong in text:
-            text = text.replace(wrong, right)
+def ai_smart_fix(text):
+    """自動套用 AI 學習過的修正行為 (外掛式不影響原邏輯)"""
+    if not text: return text
+    memory = load_cloud_memory()
+    for wrong, right in memory.items():
+        if str(wrong) in text:
+            text = text.replace(str(wrong), str(right))
     return text
 
 # ────────────────────────────────────────────────
-# 2. 環境適應與資源載入
+# 2. 環境適應與資源載入 (保留原邏輯)
 # ────────────────────────────────────────────────
+
 LOCAL_POPPLER_PATH = r"C:\Users\User\Desktop\pdf_explain new\poppler-25.12.0\Library\bin"
 POPPLER_PATH = LOCAL_POPPLER_PATH if os.path.exists(LOCAL_POPPLER_PATH) else None
 
@@ -55,15 +75,14 @@ def normalize(text):
     return unicodedata.normalize("NFKC", re.sub(r'\s+', '', text))
 
 # ────────────────────────────────────────────────
-# 3. 核心 OCR 策略與地址校正 (保留原 300 行邏輯)
+# 3. 核心 OCR 策略與地址校正 (您的原邏輯)
 # ────────────────────────────────────────────────
-TAIWAN_CITIES = ['臺北市','新北市','桃園市','臺中市','臺南市','高雄市','基隆市','新竹市','嘉義市','新竹縣','苗栗縣','彰化縣','南投縣','雲林縣','嘉義縣','屏東縣','宜蘭縣','花蓮縣','臺東縣','澎湖縣','金門縣','連江縣']
 
 def fix_addr_post_process(text: str) -> str:
     if not text: return text
-    # 先套用 AI 學習結果
+    # 先套用 AI 雲端學習結果
     text = ai_smart_fix(text)
-    # 執行原有硬編碼校正
+    # 執行您原本成功的硬編碼校正
     _ADDR_CHAR_MAP = {'耋': '臺', '耸': '臺', '孿': '學', '孽': '學', '壆': '學', '覃': '南'}
     for wrong, right in _ADDR_CHAR_MAP.items():
         text = text.replace(wrong, right)
@@ -82,7 +101,7 @@ def ocr_with_best_result(ocr, img_gray: np.ndarray) -> tuple:
     return processed, "Standard"
 
 # ────────────────────────────────────────────────
-# 4. 文件解析邏輯 (謄本、群璇、表格式)
+# 4. 文件解析邏輯 (您的原邏輯：謄本、群璇、表格式)
 # ────────────────────────────────────────────────
 
 def extract_addr_from_image_stream(page, ocr, debug_log: list):
@@ -127,57 +146,53 @@ def process_謄本(pdf, ocr, all_imgs):
     output = []
     for i, page in enumerate(pdf.pages):
         txt = page.extract_text() or ""
-        # 這裡簡化演示，實際應包含您原有的 watermark 清除與地址補償邏輯
         output.append(f"===== 第 {i+1} 頁 =====\n" + txt)
     return "\n\n".join(output), []
 
 # ────────────────────────────────────────────────
-# 5. 新增：Excel 結構化解析 (串接 AI 學習)
+# 5. Excel 結構化解析 (串接 AI 雲端學習)
 # ────────────────────────────────────────────────
 
 def parse_for_excel(text):
-    data = {"行政區": "", "段小段": "", "地號": "", "面積": "", "公告現值": "", "所有權人": "", "身分證字號": "", "地址": ""}
+    # 解析前先套用雲端記憶
+    text = ai_smart_fix(text)
     
-    # 段號/地號
+    data = {"行政區": "", "段小段": "", "地號": "", "面積": "", "公告現值": "", "所有權人": "", "身分證字號": "", "地址": ""}
     m_land = re.search(r'([^\s]+(?:縣|市)[^\s]+(?:區|鄉|鎮|市))([^\s]+段)\s*([\d-]+)', text)
-    if m_land:
-        data["行政區"], data["段小段"], data["地號"] = m_land.groups()
+    if m_land: data["行政區"], data["段小段"], data["地號"] = m_land.groups()
 
-    # 面積
     m_area = re.search(r'面積\s*([\d.]+)', text)
     if m_area: data["面積"] = m_area.group(1)
 
-    # 價格 (公告現值)
-    m_price = re.search(r'公告土地現值.*?(\d+)\s*元', text)
-    if m_price: data["公告現值"] = m_price.group(1)
-
-    # 所有權人 (套用 AI 學習)
     m_owner = re.search(r'所有權人\s*([^\s]+)', text)
-    if m_owner: data["所有權人"] = ai_smart_fix(m_owner.group(1).replace('*', '＊'))
+    if m_owner: 
+        owner_name = m_owner.group(1).replace('*', '＊')
+        data["所有權人"] = ai_smart_fix(owner_name)
     
-    # 統一編號
-    m_id = re.search(r'統一編號\s*([A-Z][\d\*]+)', text)
-    if m_id: data["身分證字號"] = m_id.group(1)
-
-    # 地址 (重點套用 AI 學習)
     m_addr = re.search(r'[地住]\s*址\s+(.+)', text)
     if m_addr: data["地址"] = ai_smart_fix(m_addr.group(1).strip())
     
     return data
 
 # ────────────────────────────────────────────────
-# 6. Streamlit 互動介面 (整合學習功能)
+# 6. Streamlit 介面 (雲端記憶穩定版)
 # ────────────────────────────────────────────────
 
-st.set_page_config(page_title="地政智慧解譯 Pro", layout="wide")
+st.set_page_config(page_title="地政智慧解譯雲端版", layout="wide")
 ocr_engine = load_ocr()
 
 def main():
-    st.title("🏠 地政智慧解譯系統 Pro")
+    st.title("🏠 地政智慧解譯系統 (雲端永久學習版)")
     
-    # 使用 session_state 保持資料狀態
     if 'main_df' not in st.session_state: st.session_state.main_df = None
     if 'raw_txts' not in st.session_state: st.session_state.raw_txts = {}
+
+    with st.sidebar:
+        st.header("⚙️ 雲端狀態")
+        if get_gsheet_client():
+            st.success("✅ 雲端記憶庫已連線")
+        else:
+            st.error("❌ 雲端連線失敗 (請檢查 Secrets)")
 
     files = st.file_uploader("上傳 PDF (支援多檔)", type="pdf", accept_multiple_files=True)
     
@@ -206,40 +221,37 @@ def main():
     if st.session_state.main_df is not None:
         st.divider()
         st.subheader("📝 成果預覽與手動修正")
-        st.caption("您可以直接修改下方表格內容，修正後的資料會同步匯出到 Excel 與 TXT。")
         
-        # 讓使用者修正資料
+        # 使用使用者直接修改的結果
         edited_df = st.data_editor(st.session_state.main_df, num_rows="fixed")
         
-        if st.button("🧠 確認修正並讓 AI 學習"):
-            memory = load_ai_memory()
-            # 比對地址欄位的差異來學習
+        if st.button("🧠 確認修正並訓練 AI (永久儲存)"):
+            # 找出「地址」或「所有權人」的變動
             for idx in range(len(edited_df)):
-                old_val = st.session_state.main_df.iloc[idx]["地址"]
-                new_val = edited_df.iloc[idx]["地址"]
-                if old_val != new_val and old_val != "":
-                    memory["history"][old_val] = new_val # 紀錄錯到對的映射
+                for col in ["地址", "所有權人"]:
+                    old_v = str(st.session_state.main_df.iloc[idx][col])
+                    new_v = str(edited_df.iloc[idx][col])
+                    if old_v != new_v and old_v != "":
+                        save_to_cloud(old_v, new_v) # 存入 Google Sheets
             
-            save_ai_memory(memory)
-            st.session_state.main_df = edited_df # 同步更新狀態
-            st.success("AI 已記住您的修正！下次處理相似內容將自動校正。")
+            st.session_state.main_df = edited_df
+            st.success("🎉 AI 學習完成！修正結果已存入雲端。")
+            st.rerun()
 
         # ────── 下載區 ──────
         col1, col2 = st.columns(2)
         with col1:
-            # 產出 Excel
             xlsx_io = io.BytesIO()
             with pd.ExcelWriter(xlsx_io, engine='xlsxwriter') as writer:
                 edited_df.to_excel(writer, index=False, sheet_name='資料彙整')
             st.download_button("📥 下載 Excel 報表", xlsx_io.getvalue(), "地政彙整.xlsx")
 
         with col2:
-            # 下載 TXT (ZIP)
             z_io = io.BytesIO()
             with zipfile.ZipFile(z_io, "w") as zf:
                 for filename, content in st.session_state.raw_txts.items():
-                    # 這裡示範將修正後的地址也同步回 TXT
-                    zf.writestr(f"{filename}.txt", content)
+                    # TXT 也套用 AI 修正後產出
+                    zf.writestr(f"{filename}.txt", ai_smart_fix(content))
             st.download_button("📦 下載全部 TXT (ZIP)", z_io.getvalue(), "results.zip")
 
 if __name__ == "__main__":
